@@ -21,6 +21,7 @@ import (
 type Config struct {
 	UserHeader  string   `json:"userHeader"`
 	GroupHeader string   `json:"groupHeader"`
+	EmailHeader string   `json:"emailHeader"`
 	Groups      []string `json:"staticGroups"`
 }
 
@@ -29,6 +30,10 @@ func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error)
 	userHeader := c.UserHeader
 	if userHeader == "" {
 		userHeader = "X-Remote-User"
+	}
+	emailHeader := c.EmailHeader
+	if emailHeader == "" {
+		emailHeader = "X-Remote-Email"
 	}
 	groupHeader := c.GroupHeader
 	if groupHeader == "" {
@@ -42,6 +47,7 @@ func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error)
 // X-Remote-User as verified email.
 type callback struct {
 	userHeader  string
+	emailHeader string
 	groupHeader string
 	groups      []string
 	logger      log.Logger
@@ -67,6 +73,10 @@ func (m *callback) HandleCallback(s connector.Scopes, r *http.Request) (connecto
 	if remoteUser == "" {
 		return connector.Identity{}, fmt.Errorf("required HTTP header %s is not set", m.userHeader)
 	}
+	remoteEmail := r.Header.Get(m.emailHeader)
+	if remoteEmail == "" {
+		return connector.Identity{}, fmt.Errorf("required HTTP header %s is not set", m.userHeader)
+	}
 	groups := m.groups
 	headerGroup := r.Header.Get(m.groupHeader)
 	if headerGroup != "" {
@@ -78,7 +88,8 @@ func (m *callback) HandleCallback(s connector.Scopes, r *http.Request) (connecto
 	}
 	return connector.Identity{
 		UserID:        remoteUser, // TODO: figure out if this is a bad ID value.
-		Email:         remoteUser,
+		Username:      remoteUser,
+		Email:         remoteEmail,
 		EmailVerified: true,
 		Groups:        groups,
 	}, nil
