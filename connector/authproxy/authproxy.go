@@ -4,6 +4,7 @@
 package authproxy
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,12 +41,12 @@ func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error)
 		groupHeader = "X-Remote-Group"
 	}
 
-	return &callback{userHeader: userHeader, groupHeader: groupHeader, logger: logger, pathSuffix: "/" + id, groups: c.Groups}, nil
+	return &authproxyConnector{userHeader: userHeader, emailHeader: emailHeader, groupHeader: groupHeader, logger: logger, pathSuffix: "/" + id, groups: c.Groups}, nil
 }
 
 // Callback is a connector which returns an identity with the HTTP header
 // X-Remote-User as verified email.
-type callback struct {
+type authproxyConnector struct {
 	userHeader  string
 	emailHeader string
 	groupHeader string
@@ -54,8 +55,15 @@ type callback struct {
 	pathSuffix  string
 }
 
+var identity connector.Identity
+
+var (
+	_ connector.CallbackConnector = (*authproxyConnector)(nil)
+	_ connector.RefreshConnector  = (*authproxyConnector)(nil)
+)
+
 // LoginURL returns the URL to redirect the user to login with.
-func (m *callback) LoginURL(s connector.Scopes, callbackURL, state string) (string, error) {
+func (m *authproxyConnector) LoginURL(s connector.Scopes, callbackURL, state string) (string, error) {
 	u, err := url.Parse(callbackURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse callbackURL %q: %v", callbackURL, err)
@@ -68,7 +76,7 @@ func (m *callback) LoginURL(s connector.Scopes, callbackURL, state string) (stri
 }
 
 // HandleCallback parses the request and returns the user's identity
-func (m *callback) HandleCallback(s connector.Scopes, r *http.Request) (connector.Identity, error) {
+func (m *authproxyConnector) HandleCallback(s connector.Scopes, r *http.Request) (connector.Identity, error) {
 	remoteUser := r.Header.Get(m.userHeader)
 	if remoteUser == "" {
 		return connector.Identity{}, fmt.Errorf("required HTTP header %s is not set", m.userHeader)
@@ -86,11 +94,17 @@ func (m *callback) HandleCallback(s connector.Scopes, r *http.Request) (connecto
 		}
 		groups = append(splitheaderGroup, groups...)
 	}
-	return connector.Identity{
+
+	identity = connector.Identity{
 		UserID:        remoteUser, // TODO: figure out if this is a bad ID value.
 		Username:      remoteUser,
 		Email:         remoteEmail,
 		EmailVerified: true,
 		Groups:        groups,
-	}, nil
+	}
+	return identity, nil
+}
+
+func (m *authproxyConnector) Refresh(ctx context.Context, s connector.Scopes, identity connector.Identity) (connector.Identity, error) {
+	return identity, nil
 }

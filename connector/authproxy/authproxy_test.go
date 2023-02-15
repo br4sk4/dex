@@ -27,7 +27,7 @@ func TestUser(t *testing.T) {
 	config := Config{
 		UserHeader: "X-Remote-User",
 	}
-	conn := callback{userHeader: config.UserHeader, logger: logger, pathSuffix: "/test"}
+	conn := authproxyConnector{userHeader: config.UserHeader, logger: logger, pathSuffix: "/test"}
 
 	req, err := http.NewRequest("GET", "/", nil)
 	expectNil(t, err)
@@ -49,7 +49,7 @@ func TestSingleGroup(t *testing.T) {
 		GroupHeader: "X-Remote-Group",
 	}
 
-	conn := callback{userHeader: config.UserHeader, groupHeader: config.GroupHeader, logger: logger, pathSuffix: "/test"}
+	conn := authproxyConnector{userHeader: config.UserHeader, groupHeader: config.GroupHeader, logger: logger, pathSuffix: "/test"}
 
 	req, err := http.NewRequest("GET", "/", nil)
 	expectNil(t, err)
@@ -72,7 +72,7 @@ func TestMultipleGroup(t *testing.T) {
 		GroupHeader: "X-Remote-Group",
 	}
 
-	conn := callback{userHeader: config.UserHeader, groupHeader: config.GroupHeader, logger: logger, pathSuffix: "/test"}
+	conn := authproxyConnector{userHeader: config.UserHeader, groupHeader: config.GroupHeader, logger: logger, pathSuffix: "/test"}
 
 	req, err := http.NewRequest("GET", "/", nil)
 	expectNil(t, err)
@@ -99,7 +99,7 @@ func TestStaticGroup(t *testing.T) {
 		Groups:      []string{"static1", "static 2"},
 	}
 
-	conn := callback{userHeader: config.UserHeader, groupHeader: config.GroupHeader, groups: config.Groups, logger: logger, pathSuffix: "/test"}
+	conn := authproxyConnector{userHeader: config.UserHeader, groupHeader: config.GroupHeader, groups: config.Groups, logger: logger, pathSuffix: "/test"}
 
 	req, err := http.NewRequest("GET", "/", nil)
 	expectNil(t, err)
