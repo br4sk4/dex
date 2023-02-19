@@ -30,6 +30,7 @@ type Config struct {
 	ClientID     string `json:"clientID"`
 	ClientSecret string `json:"clientSecret"`
 	LoginURL     string `json:"loginURL"`
+	TokenURL     string `json:"tokenURL"`
 }
 
 // Open returns a strategy for logging in through Cognito
@@ -38,6 +39,7 @@ func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error)
 		clientID:      c.ClientID,
 		clientSecret:  c.ClientSecret,
 		loginURL:      c.LoginURL,
+		tokenURL:      c.TokenURL,
 		logger:        logger,
 		cognitoClient: cognito.New(cognito.Options{Region: c.Region}),
 	}, nil
@@ -51,6 +53,7 @@ type cognitoConnector struct {
 	clientID      string
 	clientSecret  string
 	loginURL      string
+	tokenURL      string
 	logger        log.Logger
 	cognitoClient *cognito.Client
 }
@@ -64,10 +67,10 @@ func (c *cognitoConnector) LoginURL(scopes connector.Scopes, callbackURL, state 
 }
 
 func (c *cognitoConnector) HandleCallback(s connector.Scopes, r *http.Request) (identity connector.Identity, err error) {
-	username, password, _ := r.BasicAuth()
-	tokens, err := c.authorize(username, password)
+	authCode := r.URL.Query().Get("code")
+	tokens, err := c.exchangeTokens(authCode)
 	if err != nil {
-		return identity, fmt.Errorf("cognito: failed to get token: %v", err)
+		return identity, fmt.Errorf("cognito: exchange tokens: %v", err)
 	}
 
 	idToken, err := parseToken(tokens.IdToken)
@@ -190,6 +193,31 @@ func (c *cognitoConnector) generateSecretHash(username string) string {
 	return secretHash
 }
 
+func (c *cognitoConnector) exchangeTokens(authCode string) (*cognitoTokens, error) {
+	client := http.DefaultClient
+
+	response, err := client.Get(c.tokenURL + "?code=" + authCode)
+	if err != nil {
+		return nil, err
+	}
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := response.Body.Close(); err != nil {
+		return nil, err
+	}
+
+	var tokens cognitoTokens
+	if err := json.Unmarshal(responseBody, &tokens); err != nil {
+		return nil, err
+	}
+
+	return &tokens, nil
+}
+
 func parseToken(token string) (*jwt.Token, error) {
 	parsedToken, parseError := jwt.ParseNoVerify([]byte(token))
 	if parseError != nil {
@@ -211,7 +239,7 @@ func parseToken(token string) (*jwt.Token, error) {
 		return nil, httpError
 	}
 
-	var jwk cognitoJWK
+	var jwk cognitoKey
 	if unmarshalError := json.Unmarshal(body, &jwk); unmarshalError != nil {
 		return nil, unmarshalError
 	}
@@ -258,7 +286,7 @@ func convertKey(rawE, rawN string) *rsa.PublicKey {
 	return pubKey
 }
 
-type cognitoJWK struct {
+type cognitoKey struct {
 	Keys []struct {
 		KeyType   string `json:"kty"`
 		KeyID     string `json:"kid"`
