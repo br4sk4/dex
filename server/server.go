@@ -83,6 +83,9 @@ type Config struct {
 	// If enabled, the connectors selection page will always be shown even if there's only one
 	AlwaysShowLoginScreen bool
 
+	// If specified, the connectors selection page will be skipped and the given connector is automatically chosen
+	DefaultConnector string
+
 	RotateKeysAfter        time.Duration // Defaults to 6 hours.
 	IDTokensValidFor       time.Duration // Defaults to 24 hours
 	AuthRequestsValidFor   time.Duration // Defaults to 24 hours
@@ -152,6 +155,7 @@ type Server struct {
 
 	// mutex for the connectors map.
 	mu sync.Mutex
+
 	// Map of connector IDs to connectors.
 	connectors map[string]Connector
 
@@ -166,6 +170,9 @@ type Server struct {
 
 	// If enabled, show the connector selection screen even if there's only one
 	alwaysShowLogin bool
+
+	// If specified, automatically choose the given connector
+	defaultConnector string
 
 	// Used for password grant
 	passwordConnector string
@@ -275,6 +282,7 @@ func newServer(ctx context.Context, c Config, rotationStrategy rotationStrategy)
 		refreshTokenPolicy:     c.RefreshTokenPolicy,
 		skipApproval:           c.SkipApprovalScreen,
 		alwaysShowLogin:        c.AlwaysShowLoginScreen,
+		defaultConnector:       c.DefaultConnector,
 		now:                    now,
 		templates:              tmpls,
 		passwordConnector:      c.PasswordConnector,

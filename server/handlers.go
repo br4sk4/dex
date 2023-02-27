@@ -165,6 +165,18 @@ func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(connectors) > 1 && s.defaultConnector != "" && !s.alwaysShowLogin {
+		for _, c := range connectors {
+			if c.ID == s.defaultConnector {
+				connURL.Path = s.absPath("/auth", url.PathEscape(c.ID))
+				http.Redirect(w, r, connURL.String(), http.StatusFound)
+				return
+			}
+		}
+		s.renderError(r, w, http.StatusBadRequest, "Default Connector ID does not match a valid Connector")
+		return
+	}
+
 	if len(connectors) == 1 && !s.alwaysShowLogin {
 		connURL.Path = s.absPath("/auth", url.PathEscape(connectors[0].ID))
 		http.Redirect(w, r, connURL.String(), http.StatusFound)

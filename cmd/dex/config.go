@@ -135,6 +135,8 @@ type OAuth2 struct {
 	SkipApprovalScreen bool `json:"skipApprovalScreen"`
 	// If specified, show the connector selection screen even if there's only one
 	AlwaysShowLoginScreen bool `json:"alwaysShowLoginScreen"`
+	// If specified, don't show the connector selection and choose the given connector
+	DefaultConnector string `json:"defaultConnector"`
 	// This is the connector that can be used for password grant
 	PasswordConnector string `json:"passwordConnector"`
 }
