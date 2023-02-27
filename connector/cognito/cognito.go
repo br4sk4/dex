@@ -1,11 +1,11 @@
-// Package cognito provides authentication strategies using Cognito.
+// Package cognito_connector provides authentication strategies using Cognito.
 package cognito
 
 import (
+	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rsa"
-	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -26,22 +26,17 @@ var (
 )
 
 type Config struct {
-	Region       string `json:"region"`
-	ClientID     string `json:"clientID"`
-	ClientSecret string `json:"clientSecret"`
-	LoginURL     string `json:"loginURL"`
-	TokenURL     string `json:"tokenURL"`
+	LoginURL string `json:"loginURL"`
+	TokenURL string `json:"tokenURL"`
 }
 
 // Open returns a strategy for logging in through Cognito
 func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error) {
 	return &cognitoConnector{
-		clientID:      c.ClientID,
-		clientSecret:  c.ClientSecret,
-		loginURL:      c.LoginURL,
-		tokenURL:      c.TokenURL,
-		logger:        logger,
-		cognitoClient: cognito.New(cognito.Options{Region: c.Region}),
+		loginURL:   c.LoginURL,
+		tokenURL:   c.TokenURL,
+		pathSuffix: "/" + id,
+		logger:     logger,
 	}, nil
 }
 
@@ -54,13 +49,19 @@ type cognitoConnector struct {
 	clientSecret  string
 	loginURL      string
 	tokenURL      string
+	pathSuffix    string
 	logger        log.Logger
 	cognitoClient *cognito.Client
 }
 
 func (c *cognitoConnector) LoginURL(scopes connector.Scopes, callbackURL, state string) (string, error) {
+	u, err := url.Parse(callbackURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse callbackURL %q: %v", callbackURL, err)
+	}
+	u.Path += c.pathSuffix
 	v := url.Values{}
-	v.Set("redirect_uri", callbackURL)
+	v.Set("redirect_uri", u.String())
 	v.Set("state", state)
 	loginUrl, _ := url.Parse(c.loginURL + "?" + v.Encode())
 	return loginUrl.String(), nil
@@ -70,7 +71,7 @@ func (c *cognitoConnector) HandleCallback(s connector.Scopes, r *http.Request) (
 	authCode := r.URL.Query().Get("code")
 	tokens, err := c.exchangeTokens(authCode)
 	if err != nil {
-		return identity, fmt.Errorf("cognito: exchange tokens: %v", err)
+		return identity, fmt.Errorf("cognito: failed to exchange tokens: %v", err)
 	}
 
 	idToken, err := parseToken(tokens.IdToken)
@@ -112,9 +113,9 @@ func (c *cognitoConnector) Refresh(ctx context.Context, s connector.Scopes, iden
 		return identity, fmt.Errorf("cognito: failed to unmarshal connector data: %v", err)
 	}
 
-	tokens, err := c.refresh(identity.Username, data.RefreshToken)
+	tokens, err := c.refreshTokens(identity.Username, data.RefreshToken)
 	if err != nil {
-		return identity, fmt.Errorf("cognito: failed to refresh token: %v", err)
+		return identity, fmt.Errorf("cognito: failed to refresh tokens: %v", err)
 	}
 
 	idToken, err := parseToken(tokens.IdToken)
@@ -137,66 +138,27 @@ func (c *cognitoConnector) Refresh(ctx context.Context, s connector.Scopes, iden
 	return identity, nil
 }
 
-func (c *cognitoConnector) authorize(username, password string) (*cognitoTokens, error) {
-	authParams := make(map[string]string)
-	authParams["USERNAME"] = username
-	authParams["PASSWORD"] = password
-	authParams["SECRET_HASH"] = c.generateSecretHash(username)
-
-	response, err := c.cognitoClient.InitiateAuth(context.Background(), &cognito.InitiateAuthInput{
-		AuthFlow:       "USER_PASSWORD_AUTH",
-		ClientId:       &c.clientID,
-		AuthParameters: authParams,
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &cognitoTokens{
-		TokenType:    *response.AuthenticationResult.TokenType,
-		ExpiresIn:    response.AuthenticationResult.ExpiresIn,
-		AccessToken:  *response.AuthenticationResult.AccessToken,
-		IdToken:      *response.AuthenticationResult.IdToken,
-		RefreshToken: *response.AuthenticationResult.RefreshToken,
-	}, nil
-}
-
-func (c *cognitoConnector) refresh(username, refreshToken string) (*cognitoTokens, error) {
-	authParams := make(map[string]string)
-	authParams["REFRESH_TOKEN"] = refreshToken
-	authParams["SECRET_HASH"] = c.generateSecretHash(username)
-
-	response, err := c.cognitoClient.InitiateAuth(context.Background(), &cognito.InitiateAuthInput{
-		AuthFlow:       "REFRESH_TOKEN_AUTH",
-		ClientId:       &c.clientID,
-		AuthParameters: authParams,
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &cognitoTokens{
-		TokenType:    *response.AuthenticationResult.TokenType,
-		ExpiresIn:    response.AuthenticationResult.ExpiresIn,
-		AccessToken:  *response.AuthenticationResult.AccessToken,
-		IdToken:      *response.AuthenticationResult.IdToken,
-		RefreshToken: refreshToken,
-	}, nil
-}
-
-func (c *cognitoConnector) generateSecretHash(username string) string {
-	h := hmac.New(sha256.New, []byte(c.clientSecret))
-	h.Write([]byte(username + c.clientID))
-	secretHash := base64.StdEncoding.EncodeToString(h.Sum(nil))
-	return secretHash
-}
-
 func (c *cognitoConnector) exchangeTokens(authCode string) (*cognitoTokens, error) {
-	client := http.DefaultClient
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 
-	response, err := client.Get(c.tokenURL + "?code=" + authCode)
+	tokenRequestBody, err := json.Marshal(&tokenRequest{
+		GrantType: "authorization_code",
+		Code:      authCode,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := http.NewRequest(http.MethodPost, c.tokenURL, bytes.NewBuffer(tokenRequestBody))
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +178,83 @@ func (c *cognitoConnector) exchangeTokens(authCode string) (*cognitoTokens, erro
 	}
 
 	return &tokens, nil
+}
+
+func (c *cognitoConnector) refreshTokens(username, refreshToken string) (*cognitoTokens, error) {
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	tokenRequestBody, err := json.Marshal(&tokenRequest{
+		GrantType:    "refresh_token",
+		RefreshToken: refreshToken,
+		Username:     username,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := http.NewRequest(http.MethodPost, c.tokenURL, bytes.NewBuffer(tokenRequestBody))
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := response.Body.Close(); err != nil {
+		return nil, err
+	}
+
+	var tokens cognitoTokens
+	if err := json.Unmarshal(responseBody, &tokens); err != nil {
+		return nil, err
+	}
+
+	return &tokens, nil
+}
+
+type cognitoKey struct {
+	Keys []struct {
+		KeyType   string `json:"kty"`
+		KeyID     string `json:"kid"`
+		Algorythm string `json:"alg"`
+		E         string `json:"e"`
+		N         string `json:"n"`
+		Usage     string `json:"use"`
+	} `json:"keys"`
+}
+
+type cognitoTokens struct {
+	TokenType    string
+	ExpiresIn    int32
+	AccessToken  string
+	IdToken      string
+	RefreshToken string
+}
+
+type cognitoClaims struct {
+	UserID        string   `json:"sub"`
+	Username      string   `json:"cognito:username"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Groups        []string `json:"cognito:groups"`
+}
+
+type tokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	Code         string `json:"code,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Username     string `json:"username,omitempty"`
 }
 
 func parseToken(token string) (*jwt.Token, error) {
@@ -284,31 +323,4 @@ func convertKey(rawE, rawN string) *rsa.PublicKey {
 	}
 	pubKey.N.SetBytes(decodedN)
 	return pubKey
-}
-
-type cognitoKey struct {
-	Keys []struct {
-		KeyType   string `json:"kty"`
-		KeyID     string `json:"kid"`
-		Algorythm string `json:"alg"`
-		E         string `json:"e"`
-		N         string `json:"n"`
-		Usage     string `json:"use"`
-	} `json:"keys"`
-}
-
-type cognitoTokens struct {
-	TokenType    string
-	ExpiresIn    int32
-	AccessToken  string
-	IdToken      string
-	RefreshToken string
-}
-
-type cognitoClaims struct {
-	UserID        string   `json:"sub"`
-	Username      string   `json:"cognito:username"`
-	Email         string   `json:"email"`
-	EmailVerified bool     `json:"email_verified"`
-	Groups        []string `json:"cognito:groups"`
 }
