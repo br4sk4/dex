@@ -1,8 +1,8 @@
 name: PR Checks
 
 on:
-#  pull_request:
-#    types: [opened, labeled, unlabeled, synchronize]
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
 
 jobs:
   release-label:
